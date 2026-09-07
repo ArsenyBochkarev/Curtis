@@ -6,8 +6,8 @@ Curtis is a small model checker for [TVL](https://github.com/ArsenyBochkarev/TVL
 
 ## Supported temporal logics
 
-- **LTL** — with a Partial Order Reduction optimization
-- **CTL**
+- **LTL** (`Engine/LTL.lean`) — builds the product of the program with a Büchi automaton constructed from negated initial formula and runs a nested DFS over it; an accepting cycle is a counterexample lasso (prefix + loop). Comes with a Partial Order Reduction optimization.
+- **CTL** (`Engine/CTL.lean`) — explores the full state graph with a DFS, then labels it bottom-up: backward BFS for `EU`, Kosaraju's SCCs for `EG`. A failed property gets a witness trace, and the labeled graph can be dumped to a Graphviz `.dot` file with the counterexample path highlighted.
 
 ## Correctness proofs
 TODO
