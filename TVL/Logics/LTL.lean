@@ -1,4 +1,4 @@
-import TVLChecker.TVL.AtomicProposition
+import TVL.AtomicProposition
 
 inductive LTL where
   | top

@@ -1,17 +1,22 @@
 import Lake
 open Lake DSL
 
-package tvl_checker where
+package curtis where
   version := v!"0.1.0"
 
 require mathlib from git
   "https://github.com/leanprover-community/mathlib4.git"
 
+-- The library lives in several top-level directories (there is no single
+-- root module), so it is described by globs: TVL.*, Engine.*, Opts.* and
+-- Test.* submodules.
 @[default_target]
-lean_lib TVLChecker
+lean_lib Curtis where
+  globs := #[.submodules `TVL, .submodules `Engine, .submodules `Opts,
+             .submodules `Test]
 
 @[default_target]
-lean_exe tvl_checker where
+lean_exe curtis where
   root := `Main
 
 -- ============================================================================
@@ -32,20 +37,20 @@ lean_exe tvl_checker where
 -- silent on repeated runs -- while we want to see the test output every
 -- time. A module counts as failed when either step exits with an error.
 -- A failed CHECK (#assert!, expectVerify, pattern 3 of the cheat sheet in
--- TVLChecker/Test/Harness.lean) is told apart from a compile error by the
+-- Test/Harness.lean) is told apart from a compile error by the
 -- "test failed:" prefix in the error message.
 -- ============================================================================
 
 -- Test suites: name -> module list. New tests are registered here.
 -- How to write the checks themselves (three patterns) -- see the cheat
--- sheet at the top of TVLChecker/Test/Harness.lean.
+-- sheet at the top of Test/Harness.lean.
 def testSuites : List (String × List String) :=
-  [ ("Unit", ["TVLChecker.Test.Unit.Opts.POR"]),
-    ("E2E",  ["TVLChecker.Test.E2E.LTL.Simple",
-              "TVLChecker.Test.E2E.CTL.Simple"]) ]
+  [ ("Unit", ["Test.Unit.Opts.POR"]),
+    ("E2E",  ["Test.E2E.LTL.Simple",
+              "Test.E2E.CTL.Simple"]) ]
 
 -- Module name -> file path:
--- TVLChecker.Test.Unit.Opts.POR -> TVLChecker/Test/Unit/Opts/POR.lean
+-- Test.Unit.Opts.POR -> Test/Unit/Opts/POR.lean
 def moduleToFile (moduleName : String) : String :=
   String.intercalate "/" (moduleName.splitOn ".") ++ ".lean"
 

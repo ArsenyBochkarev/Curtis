@@ -1,4 +1,4 @@
-import TVLChecker.TVL.AtomicProposition
+import TVL.AtomicProposition
 
 -- CTL formula syntax tree
 inductive CTL where

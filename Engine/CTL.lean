@@ -1,6 +1,6 @@
-import TVLChecker.TVL.Sema
-import TVLChecker.TVL.AtomicProposition
-import TVLChecker.TVL.Logics.CTL
+import TVL.Sema
+import TVL.AtomicProposition
+import TVL.Logics.CTL
 
 -- Explicit state graph built in memory
 structure StateGraph where

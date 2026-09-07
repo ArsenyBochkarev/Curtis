@@ -1,5 +1,5 @@
-import TVLChecker.Test.Harness
-import TVLChecker.Engine.CTL
+import Test.Harness
+import Engine.CTL
 
 instance : Verifyiable CTL where
   verifyAndExplain startState phi :=

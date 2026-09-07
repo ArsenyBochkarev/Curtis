@@ -1,4 +1,4 @@
-import TVLChecker.TVL.Sema
+import TVL.Sema
 
 -- ============================================================================
 -- HOW TO ADD YOUR OWN TESTS (cheat sheet)
@@ -23,7 +23,7 @@ import TVLChecker.TVL.Sema
 -- (lakefile.lean): it tells a failed check apart from a compile error.
 -- Start the message of any custom throw with it.
 --
--- Test files live in TVLChecker/Test/... (module names TVLChecker.Test.*)
+-- Test files live in Test/... (module names Test.*)
 -- and are registered in testSuites in lakefile.lean -- after that they run
 -- via  lake test -- <suite>.
 -- ============================================================================

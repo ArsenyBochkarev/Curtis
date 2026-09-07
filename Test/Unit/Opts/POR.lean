@@ -1,6 +1,6 @@
-import TVLChecker.Opts.POR
-import TVLChecker.Engine.LTL
-import TVLChecker.Test.E2E.LTL.Simple
+import Opts.POR
+import Engine.LTL
+import Test.E2E.LTL.Simple
 
 -- ============================================================================
 -- Unit tests for partial order reduction (Opts/POR.lean)
@@ -82,7 +82,7 @@ def porChecks : List (String × (Bool × Nat × Nat)) :=
     ("synthetic model: propQAEventuallyBig", comparePOR porModelState propQAEventuallyBig) ]
 
 -- Silent on success; on failure, a report over the diverging checks
--- (pattern 3 of the cheat sheet in TVLChecker/Test/Harness.lean)
+-- (pattern 3 of the cheat sheet in Test/Harness.lean)
 #eval show IO Unit from
   let bad := porChecks.filter (fun (_, r) => !r.1)
   unless bad.isEmpty do

@@ -15,12 +15,11 @@ TODO
 ## Layout
 
 ```
-TVLChecker/
-  TVL/          IR semantics, atomic propositions, LTL/CTL syntax
-  Engine/       LTL and CTL checking algorithms
-  Opts/         partial order reduction
-  Output/       DOT export
-  Test/         unit and end-to-end tests
+Main.lean       demo executable entry point
+TVL/            IR semantics, atomic propositions, LTL/CTL syntax, DOT export
+Engine/         LTL and CTL checking algorithms
+Opts/           partial order reduction
+Test/           unit and end-to-end tests
 ```
 
 ## Building and testing
@@ -29,7 +28,7 @@ Requires the Lean toolchain pinned in `lean-toolchain`
 
 ```bash
 lake build            # build the library and the executable
-lake exe tvl_checker  # TODO
+lake exe curtis  # TODO
 
 lake test -- all      # run all tests (Unit + E2E)
 lake test -- Unit     # only unit tests

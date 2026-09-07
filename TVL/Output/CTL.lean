@@ -1,4 +1,4 @@
-import TVLChecker.Engine.CTL
+import Engine.CTL
 
 -- Map a state to its node id in the exported graph
 def stateToId (g : StateGraph) (s : State) : String :=

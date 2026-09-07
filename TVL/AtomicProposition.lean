@@ -1,4 +1,4 @@
-import TVLChecker.TVL.Sema
+import TVL.Sema
 
 -- Inductive type for atomic predicates
 inductive AtomicProposition where

@@ -1,5 +1,5 @@
-import TVLChecker.Test.Harness
-import TVLChecker.Engine.LTL
+import Test.Harness
+import Engine.LTL
 
 -- The action leading from one state of the trace to the next.
 -- Neighboring states of a lasso are always connected by a transition

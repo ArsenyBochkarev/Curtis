@@ -1,5 +1,5 @@
-import TVLChecker.TVL.Sema
-import TVLChecker.TVL.Logics.LTL
+import TVL.Sema
+import TVL.Logics.LTL
 
 -- ============================================================================
 -- Partial Order Reduction (POR)

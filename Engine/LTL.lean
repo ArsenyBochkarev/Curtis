@@ -1,9 +1,9 @@
 import Init.Data.List.Basic
 import Mathlib.Data.List.Basic
 
-import TVLChecker.TVL.Sema
-import TVLChecker.TVL.Logics.LTL
-import TVLChecker.Opts.POR
+import TVL.Sema
+import TVL.Logics.LTL
+import Opts.POR
 
 -- 1. Closure generator
 
