@@ -6,9 +6,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Job 1: build the library and the executable. lean-action with the test
+  # step disabled; its mathlib and .lake caches keep the rebuild fast.
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v5
       - uses: leanprover/lean-action@v1
+        with:
+          test: false
+
+  # Job 2: the test runs. Every suite is its own command and its own step,
+  # so a failure points at the suite directly (lake test with no arguments
+  # would only print the usage help of our driver and exit 1).
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v5
+      - uses: leanprover/lean-action@v1
+        with:
+          test: false
+      - name: Unit tests
+        run: lake test -- Unit
+      - name: E2E tests
+        run: lake test -- E2E

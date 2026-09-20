@@ -1,4 +1,6 @@
--- Global constant bounding the channel capacity (Rule 1)
+-- Global constant bounding the channel capacity (Rule 1): the default
+-- bound; a run may override it through the queueCap field of State
+-- (the --channel-size option of curtis).
 def MAX_QUEUE_SIZE : Nat := 10
 
 structure Transition where
@@ -46,6 +48,7 @@ abbrev ActorGraph := List (Int × IRNode) -- could later become Std.HashMap Int 
 -- Whole-system state for the interpreter
 structure State where
   queues       : List (String × List String)             -- queue name (format "Q[A][B]", A = receiver, B = sender) -> message tokens
+  queueCap     : Nat := MAX_QUEUE_SIZE                   -- channel capacity of this run (Rule 1): a send into a full queue blocks
   guardVars    : List (String × Int)                     -- counters for countable loops
   actorThreads : List (String × (List Int × Option Int)) -- key: actor name, value: list of PCs (one per thread);
                                                          -- optionally the breakExit PC of the current parallel block
@@ -95,6 +98,16 @@ def updateThreadPc (s : State) (actor : String) (threadIdx : Nat) (newPc : Int) 
     else (a, (pcs, breakOpt))
   { s with actorThreads := newThreads }
 
+-- Which queues an IR instruction touches:
+-- push and pop work with a single queue, branch may read several
+-- (receive alts); the remaining instructions are purely local.
+def instrQueues (instr : IRInstruction) : List String :=
+  match instr with
+  | .push _ q _     => [q]
+  | .pop _ q _      => [q]
+  | .branch cases _ => cases.map fun c => c.queueName
+  | _ => []
+
 -- All successors of the current state
 def step (s : State) : List (Transition × State) :=
   s.actorThreads.flatMap fun (actor, (pcs, _)) =>
@@ -130,7 +143,7 @@ def step (s : State) : List (Transition × State) :=
           -- 1. Send: append the message to the queue;
           --    blocks until there is room if the queue is full.
           | .push next qName msgName =>
-              if getQueueLen s qName < MAX_QUEUE_SIZE then
+              if getQueueLen s qName < s.queueCap then
                 let nextState := push (updateThreadPc s actor threadIdx next) qName msgName
                 let trans := { processId := actor, actionName := s!"push {msgName} to {qName}" }
                 [(trans, nextState)]

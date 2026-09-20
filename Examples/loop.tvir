@@ -1,0 +1,9 @@
+Actor: A
+  0: IRSkip(0,1,(-1,-1),0)
+
+User specs:
+  ltl NeverEnds: F (A.ACTOR_END)
+  ltl StaysAtStart: G (A.start_loop)
+
+Labels:
+  A.start_loop: 0

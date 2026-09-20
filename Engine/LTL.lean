@@ -220,10 +220,8 @@ partial def blueDFS (curr : ProductState)
 -- 2. Generate the atoms.
 -- 3. Start the NDFS from the initial product states.
 -- Returns (counterexample lasso or none, the number of product states the
--- blue DFS had visited by the moment of the verdict) -- the counter is
--- needed only by the optimization debug mode (optsDebug in Opts/POR.lean);
--- for a plain check it comes for free (blueVisited is accumulated by the
--- search anyway).
+-- blue DFS had visited by the moment of the verdict) -- the counter comes
+-- for free (blueVisited is accumulated by the search anyway).
 def checkLTLCore (startState : State) (phi : LTL)
                  (porOpt : Option (List AtomicProposition)) : Option Trace × Nat :=
   let negPhi := LTL.not phi
@@ -264,14 +262,47 @@ def checkLTL (startState : State) (phi : LTL) : Option Trace :=
   let porOpt := if formulaUsesNext phi then none else some (getVisibleAPs phi)
   (checkLTLCore startState phi porOpt).1
 
--- Optimization debug mode (the optsDebug flag in Opts/POR.lean):
--- the same as checkLTL, but the reduction is controlled explicitly
+-- The same as checkLTL, but the reduction is controlled explicitly
 -- (porOpt = none means full expansion, no reduction), and the result comes
 -- with statistics -- the number of expanded states.
--- When optsDebug = false, no statistics are collected (0 is returned).
 def checkLTLDebug (startState : State) (phi : LTL)
                   (porOpt : Option (List AtomicProposition)) : Option Trace × Nat :=
-  if optsDebug then
-    checkLTLCore startState phi porOpt
-  else
-    ((checkLTLCore startState phi porOpt).1, 0)
+  checkLTLCore startState phi porOpt
+
+-- ===========================================================================================
+-- Counterexample presentation
+-- ===========================================================================================
+
+-- The action leading from one state of the trace to the next.
+-- Neighboring states of a lasso are always connected by a transition
+-- (productStep is built on top of step), so we simply look it up among the
+-- transitions of the source state. The action description
+-- ("push X to Q[R2][R1]") already says everything: in TVL IR it is clear
+-- which actor did what.
+def transitionAction (src dst : ProductState) : String :=
+  match (step src.progState).find? fun (_, s') => s' == dst.progState with
+  | some (tr, _) => tr.actionName
+  | none => "?"
+
+-- The counterexample for an LTL formula is a lasso (prefix, loop) unfolded
+-- into a linear sequence of actions, as in the CTL harness.
+-- NDFS invariant: the prefix ends with the seed, and the loop is
+-- [seed, n1, ..., nk, seed] (the last element closes the cycle). We drop
+-- the duplicate seed from the prefix and glue the parts together:
+-- s0 -> ... -> seed -> n1 -> ... -> nk -> seed. The closing transition
+-- (nk -> seed) gets into the sequence automatically, from the loop.
+def traceToActions (t : Trace) : List String :=
+  let (pref, loop) := t
+  let path := pref.dropLast ++ loop
+  (path.zip (path.drop 1)).map fun (a, b) => transitionAction a b
+
+-- The same lasso, but with explicit textual markers where the loop starts
+-- (and where it closes). The markers start with "---", so the DOT exporter
+-- (TVL/Output/CTL.lean, reconstructPath) skips them while highlighting the
+-- counterexample path -- both consumers share one action list.
+def traceToActionsMarked (t : Trace) : List String :=
+  let (pref, loop) := t
+  let prefPath := pref.dropLast ++ loop.take 1 -- s0 -> ... -> seed
+  let prefActs := (prefPath.zip (prefPath.drop 1)).map fun (a, b) => transitionAction a b
+  let loopActs := (loop.zip (loop.drop 1)).map fun (a, b) => transitionAction a b
+  prefActs ++ ["--- LOOP STARTS HERE ---"] ++ loopActs ++ ["--- LOOP CLOSES HERE ---"]

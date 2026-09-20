@@ -58,16 +58,6 @@ def getVisibleAPs (phi : LTL) : List AtomicProposition :=
 def isInvisible (visibleAPs : List AtomicProposition) (s s' : State) : Bool :=
   visibleAPs.all (fun ap => evalAP s ap == evalAP s' ap)
 
--- Which queues an IR instruction touches:
--- push and pop work with a single queue, branch may read several
--- (receive alts); the remaining instructions are purely local.
-def instrQueues (instr : IRInstruction) : List String :=
-  match instr with
-  | .push _ q _     => [q]
-  | .pop _ q _      => [q]
-  | .branch cases _ => cases.map fun c => c.queueName
-  | _ => []
-
 -- Which queues the actor MAY touch by its actions in state s.
 -- The exact PC of the executed instruction is not stored in Transition
 -- (only processId and actionName, and actionName does not name the queue),
@@ -151,8 +141,3 @@ def applyPOR (s : State) (enabled : List (Transition × State))
       return cand
   -- Nobody fits: safe full expansion
   enabled
-
--- ============================================================================
--- TODO: move this to main
--- Debug mode for optimizations
-def optsDebug : Bool := true

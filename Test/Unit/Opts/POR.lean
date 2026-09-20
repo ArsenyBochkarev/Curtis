@@ -12,8 +12,7 @@ import Test.E2E.LTL.Simple
 --
 -- The model and the formulas are taken from the LTL E2E test, to avoid
 -- duplicating the IR program. The statistics (the number of expanded
--- states) come from checkLTLDebug -- it works when the optimization debug
--- mode is on (optsDebug = true in Opts/POR.lean).
+-- states) come from checkLTLDebug.
 -- All checks are silent: the report with the state counts is printed only
 -- on failure.
 -- ============================================================================

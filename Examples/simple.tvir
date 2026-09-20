@@ -1,0 +1,36 @@
+Actor: R1
+  1: IRQueuePush(1,4,(-1,-1),2,Q[R3][R1],Y)
+  2: IRQueuePush(2,5,(-1,-1),3,Q[R2][R1],X)
+  3: IREnd(3,6,(-1,-1))
+
+Actor: R2
+  4: IRQueuePop(4,9,(-1,-1),5,Q[R2][R1],X)
+  5: IRChoice(5,10,(-1,-1),List(7, 8))
+  7: IRSkip(7,11,(-1,-1),10)
+  8: IRQueuePush(8,14,(-1,-1),12,Q[R3][R2],X)
+  9: IREnd(9,16,(-1,-1))
+  10: IRQueuePush(10,12,(-1,-1),11,Q[R3][R2],X)
+  11: IRJump(11,10,(-1,-1),9)
+  12: IRJump(12,10,(-1,-1),9)
+
+Actor: R3
+  13: IRBranch(13,20,(-1,-1),List(QueueCondition(Q[R3][R2],X,18), QueueCondition(Q[R3][R1],Y,21)),None)
+  15: IREnd(15,25,(-1,-1))
+  17: IRJump(17,19,(-1,-1),13)
+  18: IRJump(18,21,(-1,-1),15)
+  20: IRJump(20,20,(-1,-1),17)
+  21: IRSkip(21,22,(-1,-1),22)
+  22: IRJump(22,20,(-1,-1),17)
+
+Template specs:
+  FinishingProperty
+  RecoveryProperty
+
+User specs:
+  ltl FinishDuplicate: F (R1.ACTOR_END && R2.ACTOR_END && R3.ACTOR_END)
+  ltl RecoveryProperty_R2_fail_send_0: [] (R2.fail_send -> <> R2.start_send)
+  ctl CanFinish: AG (R2.start_send -> EF R3.ACTOR_END)
+
+Labels:
+  R2.fail_send: 7
+  R2.start_send: 10
