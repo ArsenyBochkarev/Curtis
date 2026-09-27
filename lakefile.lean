@@ -104,3 +104,53 @@ script test (args) do
   else
     IO.println s!"Tests: {selected.length - failed}/{selected.length} passed, failed: {failed}"
     return 1
+
+-- ============================================================================
+-- Installation (lake run install): expose the built curtis binary on the
+-- PATH through a wrapper in ~/.local/bin, as the TVL docs describe:
+--   #!/bin/bash
+--   exec <repo>/.lake/build/bin/curtis "$@"
+-- The wrapper points into .lake, so it follows every lake build and never
+-- goes stale. lake run uninstall removes it again (only if it really is
+-- our wrapper, not some other file named curtis).
+-- ============================================================================
+
+script install (_args) do
+  let exe := ".lake/build/bin/curtis"
+  unless ← System.FilePath.pathExists exe do
+    IO.eprintln "install: curtis is not built yet -- run lake build first"
+    return 1
+  let some home ← IO.getEnv "HOME"
+    | do IO.eprintln "install: HOME is not set"; return 1
+  let binDir := s!"{home}/.local/bin"
+  IO.FS.createDirAll binDir
+  let root ← IO.currentDir
+  let binTarget := s!"{root}/{exe}"
+  let wrapper := s!"{binDir}/curtis"
+  IO.FS.writeFile wrapper s!"#!/bin/bash\nexec {binTarget} \"$@\"\n"
+  -- Lean IO cannot change the file mode, so go through chmod.
+  let chmod ← IO.Process.output { cmd := "chmod", args := #["+x", wrapper] }
+  if chmod.exitCode != 0 then
+    IO.eprintln s!"install: chmod failed: {chmod.stderr}"
+    return 1
+  IO.println s!"installed: {wrapper} -> {binTarget}"
+  if let some path ← IO.getEnv "PATH" then
+    unless path.splitOn ":" |>.contains binDir do
+      IO.println s!"note: {binDir} is not on your PATH -- add 'export PATH=\"{binDir}:$PATH\"' to ~/.profile"
+  return 0
+
+script uninstall (_args) do
+  let some home ← IO.getEnv "HOME"
+    | do IO.eprintln "uninstall: HOME is not set"; return 1
+  let wrapper := s!"{home}/.local/bin/curtis"
+  unless ← System.FilePath.pathExists wrapper do
+    IO.println s!"uninstall: {wrapper} does not exist, nothing to do"
+    return 0
+  let contents ← IO.FS.readFile wrapper
+  if contents.startsWith "#!/bin/bash" && contents.contains "/.lake/build/bin/curtis" then
+    IO.FS.removeFile wrapper
+    IO.println s!"uninstalled: {wrapper}"
+    return 0
+  else
+    IO.eprintln s!"uninstall: {wrapper} is not a curtis wrapper, leaving it alone"
+    return 1

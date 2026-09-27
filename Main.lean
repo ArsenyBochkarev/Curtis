@@ -28,6 +28,7 @@ structure CliOpts where
   debug       : Bool := false
   dotFile     : Option String := none
   channelSize : Option Nat := none
+  help        : Bool := false
   input       : Option String := none
 
 def usage : String :=
@@ -36,41 +37,51 @@ def usage : String :=
   "  --dot FILE       also write the state graph as DOT (counterexample highlighted)\n" ++
   "  --channel-size N bound each message queue to N messages (default 10);\n" ++
   "                   a send into a full queue blocks until it drains\n" ++
-  "exit codes: 0 -- all specs hold, 1 -- some spec violated, 2 -- error"
+  "  --help           print this help and exit\n" ++
+  "exit codes: 0 -- all specs hold or --help, 1 -- some spec violated, 2 -- error"
 
 def parseArgs (args : List String) : Except String CliOpts := do
   let mut opts : CliOpts := {}
   let mut positional : List String := []
   let mut rest := args
+  -- A bare `--` ends the flags: everything after it is a positional
+  -- argument, even when it starts with a dash.
+  let mut noMoreFlags := false
   while let a :: rest' := rest do
     rest := rest'
-    match a with
-    | "--debug" => opts := { opts with debug := true }
-    | "--dot" =>
-        match rest' with
-        | f :: rest'' =>
-            if f.startsWith "-" then
-              throw s!"--dot expects a file name, got '{f}'"
-            opts := { opts with dotFile := some f }
-            rest := rest''
-        | [] => throw "--dot expects a file name"
-    | "--channel-size" =>
-        match rest' with
-        | v :: rest'' =>
-            match v.toNat? with
-            | some n =>
-                if n == 0 then
-                  throw s!"--channel-size expects a positive integer, got '{v}'"
-                else
-                  opts := { opts with channelSize := some n }
-                  rest := rest''
-            | none => throw s!"--channel-size expects a positive integer, got '{v}'"
-        | [] => throw "--channel-size expects a positive integer"
-    | input =>
-        if input.startsWith "-" then
-          throw s!"unknown flag '{input}'"
-        positional := positional ++ [input]
-  if positional.isEmpty then throw "no input file given"
+    if noMoreFlags then
+      positional := positional ++ [a]
+    else
+      match a with
+      | "--" => noMoreFlags := true
+      | "--debug" => opts := { opts with debug := true }
+      | "--help" => opts := { opts with help := true }
+      | "--dot" =>
+          match rest' with
+          | f :: rest'' =>
+              if f.startsWith "-" then
+                throw s!"--dot expects a file name, got '{f}'"
+              opts := { opts with dotFile := some f }
+              rest := rest''
+          | [] => throw "--dot expects a file name"
+      | "--channel-size" =>
+          match rest' with
+          | v :: rest'' =>
+              match v.toNat? with
+              | some n =>
+                  if n == 0 then
+                    throw s!"--channel-size expects a positive integer, got '{v}'"
+                  else
+                    opts := { opts with channelSize := some n }
+                    rest := rest''
+              | none => throw s!"--channel-size expects a positive integer, got '{v}'"
+          | [] => throw "--channel-size expects a positive integer"
+      | input =>
+          if input.startsWith "-" then
+            throw s!"unknown flag '{input}'"
+          positional := positional ++ [input]
+  -- --help needs no input file; everything else does.
+  if positional.isEmpty && !opts.help then throw "no input file given"
   if positional.length > 1 then
     throw s!"expected exactly one input file, got {positional.length}"
   return { opts with input := positional.head? }
@@ -213,4 +224,10 @@ def main (args : List String) : IO UInt32 :=
       IO.eprintln s!"curtis: error: {m}"
       IO.eprintln usage
       return 2
-  | .ok opts => runChecker opts
+  | .ok opts => do
+      -- --help prints the usage to stdout (errors print it to stderr) and
+      -- exits successfully, whatever else came with it.
+      if opts.help then
+        IO.println usage
+        return 0
+      runChecker opts

@@ -11,14 +11,30 @@ Curtis reads `.tvir` files — the IR dumps produced by the [TVL](https://github
 
 For detailed description of specification language, see the [`docs/specifications`](https://github.com/ArsenyBochkarev/TVL/tree/main/docs/specifications) of the TVL repo.
 
+## Installation (Linux)
+After Curtis build, you can either run the installation script:
+
+```bash
+lake run install      # writes the ~/.local/bin/curtis wrapper
+lake run uninstall    # removes it
+```
+
+or write the wrapper by hand (into `~/.local/bin/curtis`, then `chmod +x` it):
+
+```bash
+#!/bin/bash
+exec /path/to/Curtis/.lake/build/bin/curtis "$@"
+```
+
 ## Usage
 
-```
+```bash
 usage: curtis [--debug] [--dot FILE] [--channel-size N] <input.tvir>
   --debug             model summary, expanded formulas and state counts on stderr
   --dot FILE          also write the state graph as DOT (counterexample highlighted)
   --channel-size N    bound each message queue to N messages (default: 10);
                       a send into a full queue blocks until it drains
+  --help              print this help and exit
 ```
 
 ```bash
@@ -61,4 +77,4 @@ lake test -- Unit     # only unit tests
 lake test -- E2E      # only end-to-end tests
 ```
 
-Mathlib is fetched automatically on the first build.
+Mathlib is fetched automatically on the first build; `lake exe cache get` downloads its prebuilt artifacts, so it is never compiled locally.

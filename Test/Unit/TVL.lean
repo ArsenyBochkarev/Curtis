@@ -327,11 +327,15 @@ def loopCtl (s : String) : CTL :=
 
 -- ============================================================================
 -- 6. The CLI smoke tests
+--
+-- The binary is invoked directly rather than through `lake exe`: lake
+-- eats the flag-looking arguments it recognizes as its own (e.g. --help)
+-- instead of forwarding them to the executable.
 -- ============================================================================
 
 -- Both logics in one run: the example dump with its ctl spec.
 #eval show IO Unit from do
-  let out ← IO.Process.output { cmd := "lake", args := #["exe", "curtis", "Examples/simple.tvir"] }
+  let out ← IO.Process.output { cmd := ".lake/build/bin/curtis", args := #["Examples/simple.tvir"] }
   unless out.exitCode == 0 do
     throw (IO.userError s!"test failed: smoke: lake exe curtis Examples/simple.tvir exited with {out.exitCode}\nstdout:\n{out.stdout}\nstderr:\n{out.stderr}")
   unless out.stdout.contains "[ltl] FinishingProperty: HOLDS" do
@@ -343,7 +347,7 @@ def loopCtl (s : String) : CTL :=
 #eval show IO Unit from do
   let dump := "Actor: A\n  0: IRSkip(0,1,(-1,-1),0)\n\nUser specs:\n  ctl Stuck: EF (A.ACTOR_END)\n"
   IO.FS.writeFile "/tmp/curtis_test_ctl_loop.tvir" dump
-  let out ← IO.Process.output { cmd := "lake", args := #["exe", "curtis", "/tmp/curtis_test_ctl_loop.tvir"] }
+  let out ← IO.Process.output { cmd := ".lake/build/bin/curtis", args := #["/tmp/curtis_test_ctl_loop.tvir"] }
   unless out.exitCode == 1 do
     throw (IO.userError s!"test failed: smoke: expected exit code 1, got {out.exitCode}\nstdout:\n{out.stdout}\nstderr:\n{out.stderr}")
   unless out.stdout.contains "[ctl] Stuck: VIOLATED" do
@@ -356,18 +360,27 @@ def loopCtl (s : String) : CTL :=
 #eval show IO Unit from do
   let dump := "Actor: A\n  0: IRQueuePush(0,1,(-1,-1),1,Q[B][A],M)\n  1: IRQueuePush(1,2,(-1,-1),2,Q[B][A],M)\n  2: IREnd(2,3,(-1,-1))\n\nUser specs:\n  ctl CanDouble: EF (A.ACTOR_END)\n"
   IO.FS.writeFile "/tmp/curtis_test_chan.tvir" dump
-  let plain ← IO.Process.output { cmd := "lake", args := #["exe", "curtis", "/tmp/curtis_test_chan.tvir"] }
+  let plain ← IO.Process.output { cmd := ".lake/build/bin/curtis", args := #["/tmp/curtis_test_chan.tvir"] }
   unless plain.exitCode == 0 do
     throw (IO.userError s!"test failed: smoke: default capacity exited with {plain.exitCode}\nstdout:\n{plain.stdout}\nstderr:\n{plain.stderr}")
   unless plain.stdout.contains "[ctl] CanDouble: HOLDS" do
     throw (IO.userError s!"test failed: smoke: no '[ctl] CanDouble: HOLDS' in stdout:\n{plain.stdout}")
   let bounded ← IO.Process.output
-    { cmd := "lake", args := #["exe", "curtis", "--channel-size", "1", "/tmp/curtis_test_chan.tvir"] }
+    { cmd := ".lake/build/bin/curtis", args := #["--channel-size", "1", "/tmp/curtis_test_chan.tvir"] }
   unless bounded.exitCode == 1 do
     throw (IO.userError s!"test failed: smoke: --channel-size 1 exited with {bounded.exitCode}\nstdout:\n{bounded.stdout}\nstderr:\n{bounded.stderr}")
   unless bounded.stdout.contains "[ctl] CanDouble: VIOLATED" do
     throw (IO.userError s!"test failed: smoke: no '[ctl] CanDouble: VIOLATED' in stdout:\n{bounded.stdout}")
   let bad ← IO.Process.output
-    { cmd := "lake", args := #["exe", "curtis", "--channel-size", "x", "/tmp/curtis_test_chan.tvir"] }
+    { cmd := ".lake/build/bin/curtis", args := #["--channel-size", "x", "/tmp/curtis_test_chan.tvir"] }
   unless bad.exitCode == 2 do
     throw (IO.userError s!"test failed: smoke: --channel-size x exited with {bad.exitCode}, expected 2\nstdout:\n{bad.stdout}\nstderr:\n{bad.stderr}")
+
+-- --help prints the usage to stdout and exits 0 (errors print it to
+-- stderr and exit 2).
+#eval show IO Unit from do
+  let out ← IO.Process.output { cmd := ".lake/build/bin/curtis", args := #["--help"] }
+  unless out.exitCode == 0 do
+    throw (IO.userError s!"test failed: smoke: --help exited with {out.exitCode}\nstdout:\n{out.stdout}\nstderr:\n{out.stderr}")
+  unless out.stdout.contains "usage: curtis" do
+    throw (IO.userError s!"test failed: smoke: no 'usage: curtis' in stdout:\n{out.stdout}")
