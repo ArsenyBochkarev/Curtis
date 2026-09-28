@@ -259,7 +259,7 @@ def chanBoundedOk : Bool :=
 -- ============================================================================
 
 #eval show IO Unit from do
-  let out ← IO.Process.output { cmd := ".lake/build/bin/curtis", args := #["Examples/simple.tvir"] }
+  let out ← IO.Process.output { cmd := "lake", args := #["exe", "curtis", "Examples/simple.tvir"] }
   unless out.exitCode == 0 do
     throw (IO.userError s!"test failed: smoke: lake exe curtis Examples/simple.tvir exited with {out.exitCode}\nstdout:\n{out.stdout}\nstderr:\n{out.stderr}")
   unless out.stdout.contains "HOLDS" do
