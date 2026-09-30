@@ -108,8 +108,21 @@ def instrQueues (instr : IRInstruction) : List String :=
   | .branch cases _ => cases.map fun c => c.queueName
   | _ => []
 
--- All successors of the current state
-def step (s : State) : List (Transition × State) :=
+-- One successor of a state together with the id of the instruction that
+-- executed (the pre-state pc). This is exactly the identity of a step in the
+-- canonical tvl-trace/1 counterexample format, so trace validation matches on
+-- (processId, node). `silent` marks transitions that never surface as trace
+-- steps in either target backend: both fold gotos, so an IRJump execution is
+-- invisible to the trace and validation passes through it freely.
+structure TaggedTransition where
+  trans  : Transition
+  node   : Int
+  next   : State
+  silent : Bool := false
+
+-- All successors of the current state, each tagged with the executed pc.
+-- `step` below is the untagged projection, so the two always agree.
+def stepTagged (s : State) : List TaggedTransition :=
   s.actorThreads.flatMap fun (actor, (pcs, _)) =>
 
     -- SCENARIO A: barrier synchronization at IRParallelEnd.
@@ -129,7 +142,7 @@ def step (s : State) : List (Transition × State) :=
             if a == actor then (a, ([joinPc], none)) else (a, t)
           let nextState := { s with actorThreads := newThreads }
           let trans := { processId := actor, actionName := "parallel join" }
-          [(trans, nextState)]
+          [{ trans, node := pcs.head!, next := nextState }]
       | _ => []
 
     else
@@ -138,6 +151,9 @@ def step (s : State) : List (Transition × State) :=
         match getInstruction s actor currentPc with
         | none => []
         | some node =>
+          -- Every arm below builds its tagged successor(s) through this
+          let tagged (trans : Transition) (nextState : State) (silent : Bool := false) : List TaggedTransition :=
+            [{ trans, node := currentPc, next := nextState, silent }]
           match node.instr with
 
           -- 1. Send: append the message to the queue;
@@ -146,7 +162,7 @@ def step (s : State) : List (Transition × State) :=
               if getQueueLen s qName < s.queueCap then
                 let nextState := push (updateThreadPc s actor threadIdx next) qName msgName
                 let trans := { processId := actor, actionName := s!"push {msgName} to {qName}" }
-                [(trans, nextState)]
+                tagged trans nextState
               else []
 
           -- 2. Single receive. Blocks until the head of the queue matches.
@@ -156,7 +172,7 @@ def step (s : State) : List (Transition × State) :=
                   if head == msgName then
                     let nextState := updateThreadPc (pop s qName) actor threadIdx next
                     let trans := { processId := actor, actionName := s!"pop {msgName}" }
-                    [(trans, nextState)]
+                    tagged trans nextState
                   else []
               | _ => []
 
@@ -173,20 +189,20 @@ def step (s : State) : List (Transition × State) :=
                 | some otherPc =>
                     let nextState := updateThreadPc s actor threadIdx otherPc
                     let trans := { processId := actor, actionName := "branch otherwise" }
-                    [(trans, nextState)]
+                    tagged trans nextState
                 | none => []
               else
                 -- Run the branch whose message has arrived.
-                readyCases.map fun c =>
+                readyCases.flatMap fun c =>
                   let nextState := updateThreadPc (pop s c.queueName) actor threadIdx c.bodyStart
                   let trans := { processId := actor, actionName := s!"branch receive {c.msg}" }
-                  (trans, nextState)
+                  tagged trans nextState
 
           -- 4. Unconditional jump.
           | .jump target =>
               let nextState := updateThreadPc s actor threadIdx target
               let trans := { processId := actor, actionName := s!"jump to {target}" }
-              [(trans, nextState)]
+              tagged trans nextState (silent := true)
 
           -- 5. Conditional jump for bounded loops.
           | .jumpGuard next guardVar target iterations =>
@@ -197,18 +213,18 @@ def step (s : State) : List (Transition × State) :=
               if currentVal > 0 then
                 let nextState := updateGuardVar (updateThreadPc s actor threadIdx target) guardVar (currentVal - 1)
                 let trans := { processId := actor, actionName := s!"loop guard pass ({currentVal})" }
-                [(trans, nextState)]
+                tagged trans nextState
               else
                 let nextState := updateThreadPc s actor threadIdx next
                 let trans := { processId := actor, actionName := "loop guard exit" }
-                [(trans, nextState)]
+                tagged trans nextState
 
           -- 6. Nondeterministic choice of one of the branches.
           | .choice branches =>
-              branches.map fun branchPc =>
+              branches.flatMap fun branchPc =>
                 let nextState := updateThreadPc s actor threadIdx branchPc
                 let trans := { processId := actor, actionName := s!"choice -> {branchPc}" }
-                (trans, nextState)
+                tagged trans nextState
 
           -- 7. Start of a parallel block.
           | .parallelExec branchStarts breakExit =>
@@ -216,7 +232,7 @@ def step (s : State) : List (Transition × State) :=
                 if a == actor then (a, (branchStarts, some breakExit)) else (a, (p, b))
               let nextState := { s with actorThreads := newThreads }
               let trans := { processId := actor, actionName := "parallel fork" }
-              [(trans, nextState)]
+              tagged trans nextState
 
           -- 8. End of a parallel branch; blocks until the barrier.
           | .parallelEnd _ => []
@@ -225,7 +241,12 @@ def step (s : State) : List (Transition × State) :=
           | .skipInstr next =>
               let nextState := updateThreadPc s actor threadIdx next
               let trans := { processId := actor, actionName := "skip" }
-              [(trans, nextState)]
+              tagged trans nextState
 
           -- 10. The actor has finished its work.
           | .endInstr => []
+
+-- All successors of the current state (the untagged projection of stepTagged;
+-- kept as the sole interpreter entry point for the engines).
+def step (s : State) : List (Transition × State) :=
+  (stepTagged s).map fun t => (t.trans, t.next)

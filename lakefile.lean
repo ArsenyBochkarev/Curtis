@@ -42,7 +42,7 @@ lean_exe curtis where
 -- How to write the checks themselves (three patterns) -- see the cheat
 -- sheet at the top of Test/Harness.lean.
 def testSuites : List (String × List String) :=
-  [ ("Unit", ["Test.Unit.Opts.POR", "Test.Unit.TVIR", "Test.Unit.TVL"]),
+  [ ("Unit", ["Test.Unit.Opts.POR", "Test.Unit.TVIR", "Test.Unit.TVL", "Test.Unit.Trace"]),
     ("E2E",  ["Test.E2E.LTL.Simple",
               "Test.E2E.CTL.Simple"]) ]
 
