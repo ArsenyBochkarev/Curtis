@@ -42,7 +42,7 @@ lean_exe curtis where
 -- How to write the checks themselves (three patterns) -- see the cheat
 -- sheet at the top of Test/Harness.lean.
 def testSuites : List (String × List String) :=
-  [ ("Unit", ["Test.Unit.Opts.POR", "Test.Unit.TVIR", "Test.Unit.TVL"]),
+  [ ("Unit", ["Test.Unit.Opts.POR", "Test.Unit.TVIR", "Test.Unit.TVL", "Test.Unit.Trace"]),
     ("E2E",  ["Test.E2E.LTL.Simple",
               "Test.E2E.CTL.Simple"]) ]
 
@@ -56,6 +56,16 @@ script test (args) do
   if args.isEmpty then
     IO.println ("Usage: lake test <suite>...\n" ++
       "Suites: " ++ String.intercalate ", " ((testSuites.map (·.1)) ++ ["all"]))
+    return 1
+  -- The CLI smoke tests inside the test modules invoke the built binary
+  -- during their own elaboration, so make sure the exe exists and is fresh
+  -- BEFORE any module is built (lake does not order library modules after
+  -- the exe target, and a cached .lake may hold a stale binary).
+  let exe ← IO.Process.output { cmd := "lake", args := #["build", "curtis"] }
+  if exe.exitCode != 0 then
+    IO.print exe.stdout
+    IO.eprintln exe.stderr
+    IO.eprintln "test: building the curtis executable failed"
     return 1
   -- Arguments -> list of (suite, module). "all" = every suite in order.
   let mut selected : List (String × String) := []

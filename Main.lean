@@ -1,5 +1,6 @@
 import TVL.TVIR.Frontend
 import TVL.TVIR.Spec
+import TVL.Trace.Replay
 import Engine.LTL
 import Engine.CTL
 import Opts.POR
@@ -9,6 +10,7 @@ import TVL.Output.CTL
 -- curtis -- the standalone CLI
 --
 --   usage: curtis [--debug] [--dot FILE] <input.tvir>
+--          curtis validate [--channel-size N] <model.tvir> <trace.json>
 --
 -- Reads a .tvir dump (the IR of a TVL model), rebuilds the runtime State
 -- and checks every spec of the dump: template specs expanded into concrete
@@ -17,6 +19,11 @@ import TVL.Output.CTL
 --   exit 1 -- some spec is violated
 --   exit 2 -- usage / IO / parse error
 --
+-- `validate` is the trace-validation mode of the CEGAR loop: it replays a
+-- canonical tvl-trace/1 counterexample (written by TVL's verifier.py from
+-- SPIN or TLC) against the CONCRETE model and reports whether the model can
+-- execute it. Exit 0 -- feasible, 1 -- spurious, 2 -- error.
+--
 -- LTL specs go to the Buchi-automaton engine; partial order reduction is
 -- applied automatically, exactly as checkLTL does: never for formulas with
 -- the X operator. CTL specs go to the explicit-graph labeling engine
@@ -24,26 +31,39 @@ import TVL.Output.CTL
 -- whenever the engine can build one (negation-headed formulas).
 -- ============================================================================
 
+inductive Mode where
+  | check
+  | validate
+
 structure CliOpts where
+  mode        : Mode := .check
   debug       : Bool := false
   dotFile     : Option String := none
   channelSize : Option Nat := none
   help        : Bool := false
   input       : Option String := none
+  traceFile   : Option String := none
 
 def usage : String :=
   "usage: curtis [--debug] [--dot FILE] [--channel-size N] <input.tvir>\n" ++
+  "       curtis validate [--channel-size N] <model.tvir> <trace.json>\n" ++
   "  --debug          model summary, expanded formulas and state counts on stderr\n" ++
   "  --dot FILE       also write the state graph as DOT (counterexample highlighted)\n" ++
   "  --channel-size N bound each message queue to N messages (default 10);\n" ++
   "                   a send into a full queue blocks until it drains\n" ++
+  "  validate         replay a tvl-trace/1 counterexample against the CONCRETE\n" ++
+  "                   model: exit 0 feasible, 1 spurious\n" ++
   "  --help           print this help and exit\n" ++
-  "exit codes: 0 -- all specs hold or --help, 1 -- some spec violated, 2 -- error"
+  "exit codes: 0 -- all specs hold / feasible / --help, 1 -- some spec violated / spurious, 2 -- error"
 
 def parseArgs (args : List String) : Except String CliOpts := do
   let mut opts : CliOpts := {}
   let mut positional : List String := []
   let mut rest := args
+  -- The optional subcommand must come first.
+  match rest with
+  | "validate" :: rest' => opts := { opts with mode := .validate }; rest := rest'
+  | _ => pure ()
   -- A bare `--` ends the flags: everything after it is a positional
   -- argument, even when it starts with a dash.
   let mut noMoreFlags := false
@@ -81,10 +101,18 @@ def parseArgs (args : List String) : Except String CliOpts := do
             throw s!"unknown flag '{input}'"
           positional := positional ++ [input]
   -- --help needs no input file; everything else does.
-  if positional.isEmpty && !opts.help then throw "no input file given"
-  if positional.length > 1 then
-    throw s!"expected exactly one input file, got {positional.length}"
-  return { opts with input := positional.head? }
+  match opts.mode with
+  | .check =>
+      if positional.isEmpty && !opts.help then throw "no input file given"
+      if positional.length > 1 then
+        throw s!"expected exactly one input file, got {positional.length}"
+      return { opts with input := positional.head? }
+  | .validate =>
+      match positional with
+      | [model, trace] =>
+          if opts.help then return { opts with input := some model, traceFile := some trace }
+          return { opts with input := some model, traceFile := some trace }
+      | _ => throw "validate expects exactly two files: <model.tvir> <trace.json>"
 
 -- IO with the error funneled into Except (so that a failure is just one
 -- more match arm in the pipeline below).
@@ -218,6 +246,55 @@ def runChecker (opts : CliOpts) : IO UInt32 := do
     | .ok _ => pure ()
   return if violated then 1 else 0
 
+-- Trace-validation mode (the CEGAR loop's arbiter): replay a canonical
+-- tvl-trace/1 counterexample against the CONCRETE model. Feasible means the
+-- concrete model can execute the trace (a real counterexample); spurious
+-- pinpoints the first step the concrete model cannot reproduce.
+def runValidate (opts : CliOpts) : IO UInt32 := do
+  let some input := opts.input
+    | do IO.eprintln usage; return 2
+  let some traceFile := opts.traceFile
+    | do IO.eprintln usage; return 2
+  let modelText ← match ← readFileSafe input with
+    | .error m => do IO.eprintln s!"curtis: error: {m}"; return 2
+    | .ok t => pure t
+  let traceText ← match ← readFileSafe traceFile with
+    | .error m => do IO.eprintln s!"curtis: error: {m}"; return 2
+    | .ok t => pure t
+  let (doc, state, _) ← match prepare modelText with
+    | .error m => do IO.eprintln s!"curtis: error: {m}"; return 2
+    | .ok p => pure p
+  let state := match opts.channelSize with
+    | some n => { state with queueCap := n }
+    | none => state
+  for w in doc.warnings do
+    IO.eprintln s!"curtis: warning: {w}"
+  let tf ← match parseTrace traceText with
+    | .error m => do IO.eprintln s!"curtis: error: invalid trace: {m}"; return 2
+    | .ok t => pure t
+  let res := validateTrace state tf
+  -- The machine-readable verdict line (consumed by the CEGAR driver).
+  IO.println res.toLine
+  match res with
+  | .feasible =>
+      if tf.isLasso then
+        IO.println "the concrete model can reproduce the trace (lasso: prefix and loop;"
+        IO.println "loop closure checked structurally, fairness is not modelled)"
+      else
+        IO.println "the concrete model can reproduce the whole trace"
+  | .spurious k actor node =>
+      let nodeTxt := match node with | some n => s!"node {n}" | none => "an unlabeled step"
+      IO.println s!"the concrete model cannot reproduce step {k} ({actor}, {nodeTxt}):"
+      IO.println "no successor of any candidate state matches this step"
+  | .spuriousLoop k =>
+      if k > tf.steps.length then
+        IO.println s!"the prefix is reproducible, but the final state cannot stutter"
+        IO.println "forever: some actor can still move in the concrete model"
+      else
+        IO.println s!"the prefix is reproducible, but the loop starting at step {k}"
+        IO.println "cannot be realized (body infeasible or the loop does not close)"
+  return match res with | .feasible => 0 | _ => 1
+
 def main (args : List String) : IO UInt32 :=
   match parseArgs args with
   | .error m => do
@@ -230,4 +307,6 @@ def main (args : List String) : IO UInt32 :=
       if opts.help then
         IO.println usage
         return 0
-      runChecker opts
+      match opts.mode with
+      | .check => runChecker opts
+      | .validate => runValidate opts
