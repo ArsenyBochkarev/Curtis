@@ -7,7 +7,7 @@ on:
 
 jobs:
   # Job 1: build the library and the executable. lean-action with the test
-  # step disabled; its mathlib and .lake caches keep the rebuild fast.
+  # step disabled; its elan and .lake caches keep the rebuild fast.
   build:
     runs-on: ubuntu-latest
     steps:

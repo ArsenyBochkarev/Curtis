@@ -4,9 +4,6 @@ open Lake DSL
 package curtis where
   version := v!"0.1.0"
 
-require mathlib from git
-  "https://github.com/leanprover-community/mathlib4.git"
-
 -- The library lives in several top-level directories (there is no single
 -- root module), so it is described by globs: TVL.*, Engine.*, Opts.* and
 -- Test.* submodules.

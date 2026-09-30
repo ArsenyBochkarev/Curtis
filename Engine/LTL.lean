@@ -1,5 +1,4 @@
 import Init.Data.List.Basic
-import Mathlib.Data.List.Basic
 
 import TVL.Sema
 import TVL.Logics.LTL
@@ -215,6 +214,14 @@ partial def blueDFS (curr : ProductState)
     | none => (none, blueVisited, redVisited)
   else (none, blueVisited, redVisited)
 
+-- The powerset of list: every subset, each represented as a list.
+private def powerset {α : Type} (l : List α) : List (List α) :=
+  match l with
+  | [] => [[]]
+  | a :: as =>
+    let rest := powerset as
+    rest ++ rest.map (a :: ·)
+
 -- Shared core of checkLTL / checkLTLDebug:
 -- 1. Negate the formula.
 -- 2. Generate the atoms.
@@ -226,7 +233,7 @@ def checkLTLCore (startState : State) (phi : LTL)
                  (porOpt : Option (List AtomicProposition)) : Option Trace × Nat :=
   let negPhi := LTL.not phi
   let closureList := closure negPhi
-  let allSubsets := closureList.sublists
+  let allSubsets := powerset closureList
   let allValidAtoms := allSubsets.filter (fun s => isLocallyConsistent s closureList)
   let initialAtoms := allValidAtoms.filter (fun s => s.contains negPhi)
   let initialProductStates := initialAtoms.foldl (fun acc atom =>
