@@ -36,23 +36,27 @@ inductive Mode where
   | validate
 
 structure CliOpts where
-  mode        : Mode := .check
-  debug       : Bool := false
-  dotFile     : Option String := none
-  channelSize : Option Nat := none
-  help        : Bool := false
-  input       : Option String := none
-  traceFile   : Option String := none
+  mode            : Mode := .check
+  debug           : Bool := false
+  dotFile         : Option String := none
+  channelSize     : Option Nat := none
+  abstractionFile : Option String := none
+  help            : Bool := false
+  input           : Option String := none
+  traceFile       : Option String := none
 
 def usage : String :=
   "usage: curtis [--debug] [--dot FILE] [--channel-size N] <input.tvir>\n" ++
-  "       curtis validate [--channel-size N] <model.tvir> <trace.json>\n" ++
+  "       curtis validate [--channel-size N] [--abstraction FILE] <model.tvir> <trace.json>\n" ++
   "  --debug          model summary, expanded formulas and state counts on stderr\n" ++
   "  --dot FILE       also write the state graph as DOT (counterexample highlighted)\n" ++
   "  --channel-size N bound each message queue to N messages (default 10);\n" ++
   "                   a send into a full queue blocks until it drains\n" ++
   "  validate         replay a tvl-trace/1 counterexample against the CONCRETE\n" ++
   "                   model: exit 0 feasible, 1 spurious\n" ++
+  "  --abstraction FILE (validate) tvl-abstraction-report/1 describing how the\n" ++
+  "                   abstract trace projects onto the concrete instructions\n" ++
+  "                   (branch-hoist: inserted pops map to their branch head)\n" ++
   "  --help           print this help and exit\n" ++
   "exit codes: 0 -- all specs hold / feasible / --help, 1 -- some spec violated / spurious, 2 -- error"
 
@@ -96,6 +100,14 @@ def parseArgs (args : List String) : Except String CliOpts := do
                     rest := rest''
               | none => throw s!"--channel-size expects a positive integer, got '{v}'"
           | [] => throw "--channel-size expects a positive integer"
+      | "--abstraction" =>
+          match rest' with
+          | f :: rest'' =>
+              if f.startsWith "-" then
+                throw s!"--abstraction expects a file name, got '{f}'"
+              opts := { opts with abstractionFile := some f }
+              rest := rest''
+          | [] => throw "--abstraction expects a file name"
       | input =>
           if input.startsWith "-" then
             throw s!"unknown flag '{input}'"
@@ -250,6 +262,22 @@ def runChecker (opts : CliOpts) : IO UInt32 := do
 -- tvl-trace/1 counterexample against the CONCRETE model. Feasible means the
 -- concrete model can execute the trace (a real counterexample); spurious
 -- pinpoints the first step the concrete model cannot reproduce.
+
+/-- Loads the optional --abstraction report; none = an error, already printed
+(the caller turns it into exit 2). No file given = the empty projection. -/
+def loadProjection (opts : CliOpts) (state : State) : IO (Option Projection) := do
+  let some path := opts.abstractionFile
+    | return some Projection.empty
+  match ← readFileSafe path with
+  | .error m => do IO.eprintln s!"curtis: error: {m}"; return none
+  | .ok text =>
+      match parseProjection text with
+      | .error m => do IO.eprintln s!"curtis: error: invalid abstraction report: {m}"; return none
+      | .ok p =>
+          match validateProjection state p with
+          | .error m => do IO.eprintln s!"curtis: error: {m}"; return none
+          | .ok _ => return some p
+
 def runValidate (opts : CliOpts) : IO UInt32 := do
   let some input := opts.input
     | do IO.eprintln usage; return 2
@@ -269,10 +297,14 @@ def runValidate (opts : CliOpts) : IO UInt32 := do
     | none => state
   for w in doc.warnings do
     IO.eprintln s!"curtis: warning: {w}"
+  -- The optional branch-hoist projection: how the abstract trace's
+  -- instructions map onto the concrete ones.
+  let some proj ← loadProjection opts state
+    | return 2
   let tf ← match parseTrace traceText with
     | .error m => do IO.eprintln s!"curtis: error: invalid trace: {m}"; return 2
     | .ok t => pure t
-  let res := validateTrace state tf
+  let res := validateTrace state tf proj
   -- The machine-readable verdict line (consumed by the CEGAR driver).
   IO.println res.toLine
   match res with

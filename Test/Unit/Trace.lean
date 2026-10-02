@@ -256,4 +256,129 @@ def spuriousTraceJson : String :=
   unless bad.exitCode == 1 && bad.stdout.contains "validate: spurious step=1 actor=B node=0" do
     throw (IO.userError s!"test failed: smoke spurious: exit {bad.exitCode}\n{bad.stdout}\n{bad.stderr}")
 
+-- ------------------------------------------------------------------ branch-hoist projection --
+
+/-- A: receive-alts at 0 (case q/m -> body 2, otherwise 3); B pushes m. -/
+def altsModel : State :=
+  mkInitialState
+    [ ("A", [instr 0 (.branch [{ queueName := "q", msg := "m", bodyStart := 2 }] (some 3)),
+             instr 2 (.skipInstr 4),
+             instr 3 (.skipInstr 4),
+             instr 4 .endInstr]),
+      ("B", [instr 0 (.push 2 "q" "m"), instr 2 .endInstr]) ]
+    ["q"]
+
+/-- The projection branch-hoist would produce for altsModel: the inserted pop
+id 7 maps back to the head 0. -/
+def proj7 : Projection := { mappings := [("A", 7, 0)] }
+
+-- A counterexample through the case body: with the projection the choice step
+-- is consumed (actor parked at the branch) and the pop step is remapped onto
+-- the concrete IRBranch transition, which fires because m is at the head.
+#eval show IO Unit from
+  unless isFeasible (validateTrace altsModel
+      { isLasso := false,
+        steps := [tstepN 1 "B" (some 0) (some 2), tstepN 2 "A" (some 0) (some 7),
+                  tstepN 3 "A" (some 7) (some 2), tstepN 4 "A" (some 2) (some 4)],
+        loopStart := none } proj7)do
+    throw (IO.userError "test failed: a case-body trace must be feasible under the projection")
+
+-- The same trace without the projection: the choice step's next=7 refers to
+-- a node the concrete model does not have, so it dies right there.
+#eval show IO Unit from
+  match validateTrace altsModel
+      { isLasso := false,
+        steps := [tstepN 1 "B" (some 0) (some 2), tstepN 2 "A" (some 0) (some 7),
+                  tstepN 3 "A" (some 7) (some 2), tstepN 4 "A" (some 2) (some 4)],
+        loopStart := none } with
+  | .spurious 2 "A" (some 0) => pure ()
+  | r => throw (IO.userError s!"test failed: without the projection the trace must die at the choice step, got {r.toLine}")
+
+-- Early entry with an empty stutter loop: the abstract counterexample has the
+-- actor enter the branch and block forever at the hoisted pop. The prefix is
+-- reproducible (the actor parks at the branch), but the concrete model is not
+-- terminal there (the otherwise arm is available) - a MEANINGFUL spuriousLoop,
+-- not an immediate death on an unknown node.
+#eval show IO Unit from
+  match validateTrace altsModel
+      { isLasso := true, steps := [tstepN 1 "A" (some 0) (some 7)], loopStart := some 2 } proj7 with
+  | .spuriousLoop 2 => pure ()
+  | r => throw (IO.userError s!"test failed: early entry must give spuriousLoop, got {r.toLine}")
+
+-- The otherwise arm is a real concrete transition; it replays normally even
+-- with a projection loaded.
+#eval show IO Unit from
+  unless isFeasible (validateTrace altsModel
+      { isLasso := false,
+        steps := [tstepN 1 "A" (some 0) (some 3), tstepN 2 "A" (some 3) (some 4)],
+        loopStart := none } proj7)do
+    throw (IO.userError "test failed: the otherwise arm must replay normally")
+
+-- parseProjection keeps only branch-hoist decisions.
+#eval show IO Unit from do
+  let text := "{\"format\":\"tvl-abstraction-report/1\",\"applied\":[" ++
+    "{\"actor\":\"A\",\"node\":0,\"kind\":\"branch-hoist\",\"inserted\":[7,11]}," ++
+    "{\"actor\":\"R2\",\"node\":5,\"kind\":\"loop-unroll\",\"inserted\":[]}]," ++
+    "\"refused\":[]}"
+  match parseProjection text with
+  | .error m => throw (IO.userError s!"test failed: parseProjection rejected a valid report: {m}")
+  | .ok p =>
+      unless p.headOf "A" 7 == some 0 && p.headOf "A" 11 == some 0
+          && p.headOf "R2" 7 == none && p.isBranchHead "A" 0 && !p.isBranchHead "R2" 5 do
+        throw (IO.userError "test failed: parseProjection mis-parsed the mappings")
+
+#eval show IO Unit from
+  match parseProjection "{\"format\":\"other/1\",\"applied\":[]}" with
+  | .error m => unless m.contains "format" do
+      throw (IO.userError s!"test failed: wrong-format rejection message: {m}")
+  | .ok _ => throw (IO.userError "test failed: parseProjection accepted a wrong format tag")
+
+-- validateProjection rejects a head that is not an IRBranch of the model.
+#eval show IO Unit from
+  match validateProjection altsModel { mappings := [("B", 0, 2)] } with
+  | .error m => unless m.contains "not an IRBranch" do
+      throw (IO.userError s!"test failed: guardrail message: {m}")
+  | .ok _ => throw (IO.userError "test failed: validateProjection accepted a non-branch head")
+
+-- --------------------------------------------------- CLI smoke: --abstraction --
+
+def altsSmokeModel : String :=
+  "Actor: A\n" ++
+  "  0: IRBranch(0, 1, (-1,-1), List(QueueCondition(q,m,2)), Some(3))\n" ++
+  "  2: IRSkip(2, 3, (-1,-1), 4)\n" ++
+  "  3: IRSkip(3, 4, (-1,-1), 4)\n" ++
+  "  4: IREnd(4, 5, (-1,-1))\n" ++
+  "\n" ++
+  "Actor: B\n" ++
+  "  0: IRQueuePush(0, 1, (-1,-1), 2, q, m)\n" ++
+  "  2: IREnd(2, 2, (-1,-1))\n"
+
+def altsSmokeTrace : String :=
+  "{\"format\":\"tvl-trace/1\",\"kind\":\"safety\",\"channel_size\":20,\"steps\":[" ++
+  "{\"index\":1,\"actor\":\"B\",\"node\":0,\"next\":2,\"action\":\"push\"}," ++
+  "{\"index\":2,\"actor\":\"A\",\"node\":0,\"next\":7,\"action\":\"choice\"}," ++
+  "{\"index\":3,\"actor\":\"A\",\"node\":7,\"next\":2,\"action\":\"pop\"}," ++
+  "{\"index\":4,\"actor\":\"A\",\"node\":2,\"next\":4,\"action\":\"skip\"}]}"
+
+def altsSmokeAbs : String :=
+  "{\"format\":\"tvl-abstraction-report/1\"," ++
+  "\"applied\":[{\"actor\":\"A\",\"node\":0,\"kind\":\"branch-hoist\",\"inserted\":[7]}]," ++
+  "\"refused\":[]}"
+
+#eval show IO Unit from do
+  IO.FS.writeFile "/tmp/curtis_test_alts.tvir" altsSmokeModel
+  IO.FS.writeFile "/tmp/curtis_test_alts_trace.json" altsSmokeTrace
+  IO.FS.writeFile "/tmp/curtis_test_alts_abs.json" altsSmokeAbs
+  let ok ← IO.Process.output
+    { cmd := ".lake/build/bin/curtis",
+      args := #["validate", "--abstraction", "/tmp/curtis_test_alts_abs.json",
+                "/tmp/curtis_test_alts.tvir", "/tmp/curtis_test_alts_trace.json"] }
+  unless ok.exitCode == 0 && ok.stdout.contains "validate: feasible" do
+    throw (IO.userError s!"test failed: smoke projection feasible: exit {ok.exitCode}\n{ok.stdout}\n{ok.stderr}")
+  let noProj ← IO.Process.output
+    { cmd := ".lake/build/bin/curtis",
+      args := #["validate", "/tmp/curtis_test_alts.tvir", "/tmp/curtis_test_alts_trace.json"] }
+  unless noProj.exitCode == 1 && noProj.stdout.contains "validate: spurious step=2 actor=A node=0" do
+    throw (IO.userError s!"test failed: smoke no-projection spurious: exit {noProj.exitCode}\n{noProj.stdout}\n{noProj.stderr}")
+
 end TraceTests

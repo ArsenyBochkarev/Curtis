@@ -24,6 +24,23 @@ backend ever emits one) still matches the jump transition itself. Steps with
 they match any transition of that actor. Steps of the pseudo-actor "System"
 (TLC's loop-closure marker) are skipped.
 
+## Branch-hoist projection
+
+`branch-hoist` rewrites a concrete `IRBranch` head into an `IRChoice` whose
+case bodies start with fresh consuming `IRQueuePop` nodes (ids that exist only
+in the abstract model). Without extra knowledge every counterexample entering
+a case body would die on the inserted node. A `Projection` (parsed from the
+`tvl-abstraction-report/1` the TVL driver passes via --abstraction) restores
+the correspondence: a step at an inserted node is the hoisted pop — it is
+remapped to the head and matched as the concrete IRBranch transition (which
+fires exactly when the message is at the head, consumes it, and enters the
+body); a step at the head whose `next` is an inserted node is the abstract
+choice — it consumes no transition, only pruning the candidates to the states
+where the actor is parked at the branch (in the concrete model the actor waits
+there). A head step into the `otherwise` arm is a real concrete transition and
+is replayed normally. Loop-unroll does not change the instruction alphabet and
+needs no projection.
+
 ## Lassos
 
 For `kind = "lasso"` the prefix must be feasible, plus the loop must be
@@ -108,6 +125,78 @@ def parseTrace (text : String) : Except String TraceFile := do
   let loopStart := j.field? "loop_start_index" >>= Json.asInt? |>.map (·.toNat)
   return { isLasso := kind == "lasso", steps, loopStart }
 
+/-! ## Branch-hoist projection -/
+
+/-- The branch-hoist part of a `tvl-abstraction-report/1`: how instructions of
+the ABSTRACT trace project onto instructions of the concrete model. Each entry
+maps a fresh pop node inserted by the pass back to the rewritten branch head.
+Empty = no abstraction (plain concrete trace). -/
+structure Projection where
+  -- (actor, inserted node id, head node id)
+  mappings : List (String × Int × Int) := []
+  deriving Inhabited
+
+namespace Projection
+
+def empty : Projection := {}
+
+/-- The concrete head an inserted node projects onto. -/
+def headOf (p : Projection) (actor : String) (node : Int) : Option Int :=
+  match p.mappings.find? fun (a, i, _) => a == actor && i == node with
+  | some (_, _, h) => some h
+  | none => none
+
+/-- The inserted nodes of one branch-hoist decision. -/
+def insertedOf (p : Projection) (actor : String) (head : Int) : List Int :=
+  p.mappings.filterMap fun (a, i, h) => if a == actor && h == head then some i else none
+
+/-- Is this node the head of a branch-hoist decision? -/
+def isBranchHead (p : Projection) (actor : String) (node : Int) : Bool :=
+  p.mappings.any fun (a, _, h) => a == actor && h == node
+
+end Projection
+
+/-- Parse a `tvl-abstraction-report/1` document; only the branch-hoist
+decisions change the instruction alphabet, everything else is ignored. -/
+def parseProjection (text : String) : Except String Projection := do
+  let j ← JsonParser.parse text
+  match j.field? "format" >>= Json.asString? with
+  | some "tvl-abstraction-report/1" => pure ()
+  | other => throw s!"expected format \"tvl-abstraction-report/1\", got {match other with | some f => f | none => "none"}"
+  let applied : List Json :=
+    match j.field? "applied" with
+    | none => []
+    | some aj => aj.items
+  let mut mappings : List (String × Int × Int) := []
+  for d in applied do
+    let kind := (d.field? "kind" >>= Json.asString?).getD ""
+    if kind != "branch-hoist" then
+      continue
+    let actor ← match d.field? "actor" >>= Json.asString? with
+      | some a => pure a
+      | none => throw "branch-hoist entry without an actor"
+    let head ← match d.field? "node" >>= Json.asInt? with
+      | some n => pure n
+      | none => throw s!"branch-hoist entry for {actor} without a node"
+    let inserted : List Int :=
+      match d.field? "inserted" with
+      | none => []
+      | some ij => ij.items.filterMap (·.asInt?)
+    mappings := mappings ++ inserted.map fun i => (actor, i, head)
+  return { mappings }
+
+/-- Guardrail: every projected head must be an IRBranch of the concrete model,
+otherwise the report does not belong to this model. -/
+def validateProjection (state : State) (proj : Projection) : Except String Unit := do
+  let mut seen : List (String × Int) := []
+  for (actor, _, head) in proj.mappings do
+    unless seen.contains (actor, head) do
+      seen := (actor, head) :: seen
+      match state.actorGraphs.lookup actor >>= fun g => g.lookup head with
+      | some { instr := .branch _ _, .. } => pure ()
+      | some _ => throw s!"abstraction projection: actor {actor} node {head} is not an IRBranch"
+      | none => throw s!"abstraction projection: actor {actor} has no instruction {head}"
+
 /-! ## Candidate-set replay -/
 
 /-- Transitive closure through silent (IRJump) transitions. -/
@@ -178,20 +267,59 @@ private def consumeEndStep (cands : List State) (st : TraceStep) : Option (List 
       let kept := cands.filter parkedAtEnd
       if kept.isEmpty then none else some kept
 
+/-- Branch-hoist projection, choice step: a step at a rewritten head whose
+`next` is an inserted node is the abstract choice. It demands no concrete
+transition — in the concrete model the actor merely waits at the branch — so
+the candidates are pruned to the states where the actor is parked at the head
+(closed under silent jumps). Returns none when this is not such a step (or no
+candidate is parked there: then the generic path below reports the step). -/
+private def projectChoiceStep (proj : Projection) (cands : List State) (st : TraceStep) :
+    Option (List State) :=
+  match st.node with
+  | some n =>
+      let goesToInserted :=
+        match st.next with
+        | some nx => (proj.insertedOf st.actor n).contains nx
+        | none => false
+      if proj.isBranchHead st.actor n && goesToInserted then
+        let kept := (silentClosure [] cands).filter fun s => actorAtPc s st.actor n
+        if kept.isEmpty then none else some kept
+      else none
+  | none => none
+
+/-- Branch-hoist projection, pop step: a step at an inserted node is the
+hoisted consuming pop; it corresponds to the concrete IRBranch transition, so
+the node is remapped to the head (the rest of the step — `next`, actor — is
+unchanged and checked by the generic machinery). -/
+private def remapStep (proj : Projection) (st : TraceStep) : TraceStep :=
+  match st.node with
+  | some n => match proj.headOf st.actor n with
+    | some h => { st with node := some h }
+    | none => st
+  | none => st
+
 /-- Replay a step sequence; `.ok` carries the final candidates, `.error` the
 first unreproducible step. -/
-def replayPrefix (cands : List State) : List TraceStep → Except ValidateResult (List State)
+def replayPrefix (proj : Projection) (cands : List State) :
+    List TraceStep → Except ValidateResult (List State)
   | [] => .ok cands
   | st :: rest =>
       -- "System" is TLC's loop-closure bookkeeping, not a real actor step
-      if st.actor == "System" then replayPrefix cands rest
+      if st.actor == "System" then replayPrefix proj cands rest
       else
-        match consumeEndStep cands st with
-        | some cands' => replayPrefix cands' rest
+        match projectChoiceStep proj cands st with
+        | some cands' => replayPrefix proj cands' rest
         | none =>
-            let next := advance cands st
-            if next.isEmpty then .error <| .spurious st.index st.actor st.node
-            else replayPrefix next rest
+            -- the verdict below reports the ORIGINAL node: for a remapped pop
+            -- step that is the inserted id, which the driver maps back to the
+            -- head when refining
+            let st' := remapStep proj st
+            match consumeEndStep cands st' with
+            | some cands' => replayPrefix proj cands' rest
+            | none =>
+                let next := advance cands st'
+                if next.isEmpty then .error <| .spurious st.index st.actor st.node
+                else replayPrefix proj next rest
 
 /-- Can any plain-transition path from `frontier` reach a state in `targets`? -/
 private partial def canReach (targets : List State) (visited : List State) : List State → Bool
@@ -201,16 +329,17 @@ private partial def canReach (targets : List State) (visited : List State) : Lis
       else if targets.any (· == c) then true
       else canReach targets (c :: visited) ((stepTagged c).map (·.next) ++ rest)
 
-/-- Validate a parsed trace against the initial state of the concrete model. -/
-def validateTrace (start : State) (tf : TraceFile) : ValidateResult :=
+/-- Validate a parsed trace against the initial state of the concrete model.
+`proj` carries the branch-hoist projection (defaults to none). -/
+def validateTrace (start : State) (tf : TraceFile) (proj : Projection := {}) : ValidateResult :=
   match tf.loopStart with
   | none =>
-      match replayPrefix [start] tf.steps with
+      match replayPrefix proj [start] tf.steps with
       | .ok _ => .feasible
       | .error r => r
   | some ls =>
       let n := ls - 1
-      match replayPrefix [start] (tf.steps.take n) with
+      match replayPrefix proj [start] (tf.steps.take n) with
       | .error r => r
       | .ok afterPrefix =>
           match tf.steps.drop n with
@@ -220,7 +349,7 @@ def validateTrace (start : State) (tf : TraceFile) : ValidateResult :=
               if afterPrefix.any fun c => (stepTagged c).isEmpty then .feasible
               else .spuriousLoop ls
           | loopSteps =>
-              match replayPrefix afterPrefix loopSteps with
+              match replayPrefix proj afterPrefix loopSteps with
               | .error r => r
               | .ok afterLoop =>
                   if canReach afterPrefix [] afterLoop then .feasible
