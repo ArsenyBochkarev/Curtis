@@ -8,6 +8,11 @@ on:
 jobs:
   # Job 1: build the library and the executable. lean-action with the test
   # step disabled; its elan and .lake caches keep the rebuild fast.
+  #
+  # The exe comes FIRST: the CLI smoke tests inside the test modules invoke
+  # .lake/build/bin/curtis during their own elaboration, and lake gives no
+  # ordering guarantee between library modules and the exe target (with a
+  # cached .lake the binary may even be stale from an older commit).
   build:
     runs-on: ubuntu-latest
     steps:
@@ -15,6 +20,9 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           test: false
+          build-args: curtis
+      - name: Build everything else
+        run: lake build
 
   # Job 2: the test runs. Every suite is its own command and its own step,
   # so a failure points at the suite directly (lake test with no arguments
