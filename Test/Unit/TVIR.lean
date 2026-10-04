@@ -11,11 +11,11 @@ import Test.Harness
 -- infinite model (also Examples/loop.tvir), a dump with an unknown
 -- template spec, and a sender without a consumer for the bounded-channel
 -- checks. Every check is a named boolean + #assert! (pattern 1 of
--- the cheat sheet in Test/Harness.lean); the CLI is exercised through an
--- IO.Process smoke test (pattern 3).
+-- the cheat sheet in Test/Harness.lean).
 -- The spec frontend itself -- formula parsers, template expansion, spec
--- set, verdicts -- is tested in Test/Unit/TVL.lean (it imports this
--- module and reuses the fixtures).
+-- set, verdicts -- and the CLI smoke tests (pattern 3: the binary run
+-- on Examples/simple.tvir and the flag handling) are in Test/Unit/TVL.lean
+-- (it imports this module and reuses the fixtures).
 -- ============================================================================
 
 -- ============================================================================
@@ -253,14 +253,3 @@ def chanBoundedOk : Bool :=
   | _ => false
 
 #assert! chanBoundedOk
-
--- ============================================================================
--- 4. The CLI smoke test
--- ============================================================================
-
-#eval show IO Unit from do
-  let out ← IO.Process.output { cmd := "lake", args := #["exe", "curtis", "Examples/simple.tvir"] }
-  unless out.exitCode == 0 do
-    throw (IO.userError s!"test failed: smoke: lake exe curtis Examples/simple.tvir exited with {out.exitCode}\nstdout:\n{out.stdout}\nstderr:\n{out.stderr}")
-  unless out.stdout.contains "HOLDS" do
-    throw (IO.userError s!"test failed: smoke: no HOLDS in stdout:\n{out.stdout}")
