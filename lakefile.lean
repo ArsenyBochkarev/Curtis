@@ -5,12 +5,21 @@ package curtis where
   version := v!"0.1.0"
 
 -- The library lives in several top-level directories (there is no single
--- root module), so it is described by globs: TVL.*, Engine.*, Opts.* and
--- Test.* submodules.
+-- root module), so it is described by globs: TVL.*, Engine.* and Opts.*
+-- submodules.
 @[default_target]
 lean_lib Curtis where
-  globs := #[.submodules `TVL, .submodules `Engine, .submodules `Opts,
-             .submodules `Test]
+  globs := #[.submodules `TVL, .submodules `Engine, .submodules `Opts]
+
+-- Test.* is deliberately NOT a default target: the test modules run the
+-- built curtis binary from their #eval blocks (the CLI smoke tests in
+-- Test/Unit/TVL.lean), and a single `lake build` gives no ordering between
+-- linking the executable and elaborating a test module -- elaborating the
+-- tests during a plain build races with (or just runs before) the link
+-- step. Tests are built and run by `lake test`, which builds the binary
+-- first; building them by name (`lake build Test.Unit.TVL`) also works.
+lean_lib CurtisTests where
+  globs := #[.submodules `Test]
 
 @[default_target]
 lean_exe curtis where
@@ -26,6 +35,10 @@ lean_exe curtis where
 --   lake test           -- usage help
 --
 -- The same without `--`: lake run test Unit / E2E / all
+--
+-- Before the modules, the driver builds the curtis executable: the CLI
+-- smoke tests in Test/Unit/TVL.lean invoke .lake/build/bin/curtis from
+-- their #eval blocks, and the binary must already exist by then.
 --
 -- Every test module is executed as follows:
 --   1. lake build <module>  -- rebuilds stale dependencies;
@@ -71,6 +84,13 @@ script test (args) do
       | none =>
         IO.eprintln s!"Unknown test suite: '{arg}'"
         return 1
+  -- Build the binary first (see the comment above the script).
+  let exe ← IO.Process.output { cmd := "lake", args := #["build", "curtis:exe"] }
+  if exe.exitCode != 0 then
+    IO.print exe.stdout
+    IO.eprintln exe.stderr
+    IO.eprintln "test: failed to build the curtis executable"
+    return 1
   let mut failed := 0
   for (suite, moduleName) in selected do
     IO.println s!"=== [{suite}] {moduleName} ==="
