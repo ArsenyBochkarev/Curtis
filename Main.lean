@@ -8,7 +8,8 @@ import TVL.Output.CTL
 -- ============================================================================
 -- curtis -- the standalone CLI
 --
---   usage: curtis [--debug] [--dot FILE] <input.tvir>
+--   usage: curtis [--debug] [--dot FILE] [--channel-size N]
+--                 [--weak-fairness | --strong-fairness] <input.tvir>
 --
 -- Reads a .tvir dump (the IR of a TVL model), rebuilds the runtime State
 -- and checks every spec of the dump: template specs expanded into concrete
@@ -22,21 +23,33 @@ import TVL.Output.CTL
 -- the X operator. CTL specs go to the explicit-graph labeling engine
 -- (generateGraph + checkCTL); a violated CTL spec gets a witness trace
 -- whenever the engine can build one (negation-headed formulas).
+--
+-- With a fairness flag every path quantifier ranges over fair paths only
+-- (all actors at once, the SPIN -f / TLA+ fair / fair+ style; the
+-- definitions live in Engine/Fair.lean): --weak-fairness assumes each
+-- actor executes whenever it is continuously enabled, --strong-fairness
+-- whenever it is enabled infinitely often; both flags together mean
+-- strong only (SF implies WF on every path).
 -- ============================================================================
 
 structure CliOpts where
-  debug       : Bool := false
-  dotFile     : Option String := none
-  channelSize : Option Nat := none
-  help        : Bool := false
-  input       : Option String := none
+  debug          : Bool := false
+  dotFile        : Option String := none
+  channelSize    : Option Nat := none
+  weakFairness   : Bool := false
+  strongFairness : Bool := false
+  help           : Bool := false
+  input          : Option String := none
 
 def usage : String :=
-  "usage: curtis [--debug] [--dot FILE] [--channel-size N] <input.tvir>\n" ++
+  "usage: curtis [--debug] [--dot FILE] [--channel-size N]\n" ++
+  "              [--weak-fairness | --strong-fairness] <input.tvir>\n" ++
   "  --debug          model summary, expanded formulas and state counts on stderr\n" ++
   "  --dot FILE       also write the state graph as DOT (counterexample highlighted)\n" ++
   "  --channel-size N bound each message queue to N messages (default 10);\n" ++
   "                   a send into a full queue blocks until it drains\n" ++
+  "  --weak-fairness   check over weakly fair paths only (all actors at once)\n" ++
+  "  --strong-fairness check over strongly fair paths only; wins over --weak-fairness\n" ++
   "  --help           print this help and exit\n" ++
   "exit codes: 0 -- all specs hold or --help, 1 -- some spec violated, 2 -- error"
 
@@ -56,6 +69,8 @@ def parseArgs (args : List String) : Except String CliOpts := do
       | "--" => noMoreFlags := true
       | "--debug" => opts := { opts with debug := true }
       | "--help" => opts := { opts with help := true }
+      | "--weak-fairness" => opts := { opts with weakFairness := true }
+      | "--strong-fairness" => opts := { opts with strongFairness := true }
       | "--dot" =>
           match rest' with
           | f :: rest'' =>
@@ -152,6 +167,16 @@ def runChecker (opts : CliOpts) : IO UInt32 := do
   let state := match opts.channelSize with
     | some n => { state with queueCap := n }
     | none => state
+  -- The fairness of the run (Engine/Fair.lean): none -- every path counts;
+  -- some false -- weakly fair paths; some true -- strongly fair paths.
+  -- Both flags together: strong wins (SF implies WF on every path, so the
+  -- strong assumption subsumes the weak one).
+  let fairMode : Option Bool :=
+    if opts.strongFairness then some true
+    else if opts.weakFairness then some false
+    else none
+  if opts.weakFairness && opts.strongFairness then
+    IO.eprintln "curtis: note: both fairness flags given, strong wins (SF implies WF)"
   -- Warnings (unknown template specs, key != id dump lines, unpaired
   -- labels) go to stderr and never affect the exit code.
   for w in doc.warnings ++ specSet.warnings do
@@ -161,6 +186,10 @@ def runChecker (opts : CliOpts) : IO UInt32 := do
     IO.eprintln s!"model: {doc.actors.length} actors, {instrCount} instructions, {doc.labels.length} labels"
     IO.eprintln s!"queues: {String.intercalate ", " (state.queues.map (·.1))}"
     IO.eprintln s!"channel capacity: {state.queueCap}"
+    match fairMode with
+    | some true => IO.eprintln "fairness: strong (all actors)"
+    | some false => IO.eprintln "fairness: weak (all actors)"
+    | none => pure ()
     for (name, phi) in specSet.ltl do
       IO.eprintln s!"[ltl] {name}: {ltlToString phi}"
     for (name, phi) in specSet.ctl do
@@ -171,8 +200,12 @@ def runChecker (opts : CliOpts) : IO UInt32 := do
   let mut cexForDot : Option (List String) := none
   for (name, phi) in specSet.ltl do
     -- The same reduction policy as checkLTL: never for formulas with X.
+    -- (checkLTLFair always expands fully -- its own comment explains why.)
     let porOpt := if formulaUsesNext phi then none else some (getVisibleAPs phi)
-    let (trace?, states) := checkLTLCore state phi porOpt
+    let (trace?, states) :=
+      match fairMode with
+      | none => checkLTLCore state phi porOpt
+      | some strong => checkLTLFair state phi strong
     match trace? with
     | none =>
         IO.println s!"[ltl] {name}: HOLDS"
@@ -188,8 +221,15 @@ def runChecker (opts : CliOpts) : IO UInt32 := do
         if cexForDot.isNone then cexForDot := some acts
   unless specSet.ctl.isEmpty do
     let graph := generateGraph state
+    -- The fair context is shared by every CTL spec of the run and computed
+    -- once: the FairSpec (actors + enabledness read off the graph) and the
+    -- fair states -- the `fair` atom of the fair-CTL scheme (the states
+    -- starting a fair path).
+    let fairCtx? : Option FairCtx := fairMode.map fun strong =>
+      let spec := fairSpecOfGraph graph strong
+      { spec := spec, fairStates := computeFairStates graph spec }
     for (name, phi) in specSet.ctl do
-      let marked := checkCTL graph phi
+      let marked := checkCTL graph phi fairCtx?
       let holds :=
         match marked.labels.lookup state with
         | some ctls => ctls.contains phi
@@ -201,7 +241,7 @@ def runChecker (opts : CliOpts) : IO UInt32 := do
         IO.println s!"[ctl] {name}: VIOLATED"
         -- A linear witness exists for negation-headed formulas; for the
         -- other shapes the labeled graph (see --dot) is the explanation.
-        match getCounterexample marked state phi with
+        match getCounterexample marked state phi fairCtx? with
         | some acts =>
             IO.println "  counterexample (a trace of actions):"
             for (a, i) in acts.zipIdx 1 do
@@ -209,7 +249,10 @@ def runChecker (opts : CliOpts) : IO UInt32 := do
             if cexForDot.isNone then cexForDot := some acts
         | none =>
             IO.println "  no linear counterexample for this formula shape (use --dot to inspect the graph)"
-      if opts.debug then IO.eprintln s!"  checked over {graph.states.length} states"
+      if opts.debug then
+        IO.eprintln s!"  checked over {graph.states.length} states"
+        if let some fc := fairCtx? then
+          IO.eprintln s!"  fair states: {fc.fairStates.length} of {graph.states.length}"
   if let some dotFile := opts.dotFile then
     let graph := generateGraph state
     let dot := exportToDot graph state cexForDot

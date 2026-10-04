@@ -3,6 +3,7 @@ import Init.Data.List.Basic
 import TVL.Sema
 import TVL.Logics.LTL
 import Opts.POR
+import Engine.Fair
 
 -- 1. Closure generator
 
@@ -275,6 +276,82 @@ def checkLTL (startState : State) (phi : LTL) : Option Trace :=
 def checkLTLDebug (startState : State) (phi : LTL)
                   (porOpt : Option (List AtomicProposition)) : Option Trace × Nat :=
   checkLTLCore startState phi porOpt
+
+-- ===========================================================================================
+-- Fair LTL checking
+-- ===========================================================================================
+
+-- The product successors of `ps` with the transition KEPT: (actor, target)
+-- pairs, so that the product edges can carry the executing actor (productStep
+-- drops the transition, and looking it back up from the target state is
+-- ambiguous -- two different actors may step between the same states).
+-- Sibling of productStep; POR is never applied here (see checkLTLFair).
+def productStepTagged (ps : ProductState) (allValidAtoms : List Atom) (closure : List LTL)
+                      : List (String × ProductState) := Id.run do
+  let progSteps := step ps.progState
+  let mut validNextProductStates := []
+  for (tr, next_s) in progSteps do
+    for next_a in allValidAtoms do
+      if isValidBuchiTransition ps.buchiState next_a closure then
+        let nextPS := ProductState.mk next_s next_a
+        if isProductStateValid nextPS then
+          validNextProductStates := (tr.processId, nextPS) :: validNextProductStates
+  validNextProductStates.reverse
+
+-- Fairness-aware LTL checking (Engine/Fair.lean has the definitions).
+-- The tableau is built exactly as in checkLTLCore: the fairness constraints
+-- are NOT folded into the formula (powerset materializes 2^|closure|, and
+-- every GF constraint would multiply that). Instead the whole reachable
+-- product graph is explored eagerly, its edges tagged with the executing
+-- actor, and the verdict is the existence of a FAIR accepting cycle:
+--   * accept of the FairSpec is the Buchi acceptance of the tableau atom
+--     (a fair run must still satisfy the tableau infinitely often);
+--   * enabled A ps  :=  A has an executable step in ps.progState.
+-- Partial order reduction is disabled (full expansion): the ample-set
+-- conditions are proved for the plain accepting-cycle search, not for the
+-- fair-region decomposition -- the red DFS above expands fully for the
+-- same reason. The counterexample lasso satisfies the NDFS invariant
+-- (the prefix ends with the seed, the loop is [seed, ..., seed]), so
+-- traceToActions / traceToActionsMarked work on it unchanged.
+partial def checkLTLFair (startState : State) (phi : LTL) (strong : Bool)
+                         : Option Trace × Nat :=
+  let negPhi := LTL.not phi
+  let closureList := closure negPhi
+  let allValidAtoms := (powerset closureList).filter (fun s => isLocallyConsistent s closureList)
+  let initialAtoms := allValidAtoms.filter (fun s => s.contains negPhi)
+  let initialProductStates := initialAtoms.foldl (fun acc atom =>
+    let ps := ProductState.mk startState atom
+    if isProductStateValid ps then ps :: acc
+    else acc
+  ) []
+  -- Eager DFS over the product (the generateGraph pattern): collect every
+  -- reachable node and every product edge, tagged with the actor.
+  let rec explore (stack : List ProductState) (visited : List ProductState)
+                  (edges : List (ProductState × String × ProductState))
+      : List ProductState × List (ProductState × String × ProductState) :=
+    match stack with
+    | [] => (visited, edges)
+    | h :: t =>
+        if visited.contains h then explore t visited edges
+        else
+          let succs := productStepTagged h allValidAtoms closureList
+          let newEdges := succs.map fun (actor, ps) => (h, actor, ps)
+          explore (succs.map Prod.snd ++ t) (h :: visited) (newEdges ++ edges)
+  let (visited, edges) := explore initialProductStates [] []
+  let spec : FairSpec ProductState := {
+    actors  := startState.actorGraphs.map Prod.fst
+    accept  := some (fun ps => isAccepting ps.buchiState closureList)
+    strong  := strong
+    enabled := fun a ps => (step ps.progState).any fun (tr, _) => tr.processId == a
+  }
+  let regions := fairRegions visited edges spec
+  -- No fair accepting cycle anywhere: every fair run satisfies phi -- HOLDS.
+  -- Otherwise exhibit a lasso from the first initial state that reaches a
+  -- fair region (some initial state must: a region is reachable from one).
+  let lasso? :=
+    (initialProductStates.filterMap fun s =>
+      (regions.filterMap fun r => fairLasso visited edges r spec s).head?).head?
+  (lasso?, visited.length)
 
 -- ===========================================================================================
 -- Counterexample presentation

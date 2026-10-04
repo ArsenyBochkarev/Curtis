@@ -6,7 +6,7 @@ Curtis reads `.tvir` files — the IR dumps produced by the [TVL](https://github
 
 ## Supported temporal logics
 
-- **LTL** (`Engine/LTL.lean`) — builds the product of the program with a Büchi automaton constructed from negated initial formula and runs a nested DFS over it. An accepting cycle is a counterexample lasso. Comes with a Partial Order Reduction optimization.
+- **LTL** (`Engine/LTL.lean`) — builds the product of the program with a Büchi automaton constructed from negated initial formula and runs a nested DFS over it. An accepting cycle is a counterexample lasso. Comes with a Partial Order Reduction optimization
 - **CTL** (`Engine/CTL.lean`) — explores the full state graph with a DFS, then labels it bottom-up: backward BFS for `EU`, Kosaraju's SCCs for `EG`
 
 For detailed description of specification language, see the [`docs/specifications`](https://github.com/ArsenyBochkarev/TVL/tree/main/docs/specifications) of the TVL repo.
@@ -14,11 +14,14 @@ For detailed description of specification language, see the [`docs/specification
 ## Usage
 
 ```bash
-curtis [--debug] [--dot FILE] [--channel-size N] <input.tvir>
+curtis [--debug] [--dot FILE] [--channel-size N]
+       [--weak-fairness | --strong-fairness] <input.tvir>
   --debug             model summary, expanded formulas and state counts on stderr
   --dot FILE          also write the state graph as DOT (counterexample highlighted)
   --channel-size N    bound each message queue to N messages (default: 10);
                       a send into a full queue blocks until it drains
+  --weak-fairness     check over weakly fair runs only
+  --strong-fairness   check over strongly fair runs only; wins over --weak-fairness
   --help              print this help and exit
 ```
 

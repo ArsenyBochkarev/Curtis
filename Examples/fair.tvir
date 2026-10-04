@@ -1,0 +1,14 @@
+Actor: S
+  0: IRQueuePush(0,1,(-1,-1),1,Q[V][S],m)
+  1: IRJump(1,2,(-1,-1),1)
+
+Actor: V
+  0: IRQueuePop(0,3,(-1,-1),1,Q[V][S],m)
+  1: IRJump(1,4,(-1,-1),0)
+
+User specs:
+  ltl Receives: F (V.received)
+  ctl ReceivesCTL: AF (V.received)
+
+Labels:
+  V.received: 1
