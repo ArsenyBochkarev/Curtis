@@ -25,6 +25,8 @@ curtis [--debug] [--dot FILE] [--channel-size N]
   --help              print this help and exit
 ```
 
+*Note*: fairness setting doesn't affect `parallelExec` branches
+
 ## Building from scratch for the first time
 
 ```bash
